@@ -21,14 +21,14 @@ on:
 # Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 # ---------------------------------------------------------------------------
 env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'fdp-detection-service' }}
-  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'fdp-eks' }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'fdp/fraud-detection-service-repo' }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'fdp-dev-euw2-eks' }}
   K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'fraud-detection' }}
   REPLICAS: ${{ vars.REPLICAS || '3' }}
   HPA_MIN: ${{ vars.HPA_MIN || '3' }}
   HPA_MAX: ${{ vars.HPA_MAX || '10' }}
-  APP_ENV: ${{ vars.APP_ENV || 'prod' }}
+  APP_ENV: ${{ vars.APP_ENV || 'dev' }}
   LOG_LEVEL_APP: ${{ vars.LOG_LEVEL_APP || 'INFO' }}
   FRAUD_DECISION_CHALLENGE_SCORE: ${{ vars.FRAUD_DECISION_CHALLENGE_SCORE || '40' }}
   FRAUD_DECISION_BLOCK_SCORE: ${{ vars.FRAUD_DECISION_BLOCK_SCORE || '80' }}
