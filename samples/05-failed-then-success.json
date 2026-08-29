@@ -1,0 +1,11 @@
+{
+  "transactionId": "TXN-20260829-0005-success",
+  "customerId": "CUST2005",
+  "type": "CREDIT_CARD",
+  "status": "SUCCESS",
+  "amount": 799.00,
+  "currency": "INR",
+  "channel": "ECOM",
+  "ipAddress": "185.220.101.5",
+  "_note": "Send 3+ requests with \"status\":\"FAILED\" for the same customerId first, then this one."
+}

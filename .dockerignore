@@ -1,0 +1,10 @@
+target/
+.git/
+.github/
+.idea/
+k8s/
+samples/
+*.md
+!README.md
+.gitignore
+.dockerignore

@@ -1,0 +1,21 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: fdp-detection-service
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: fdp-detection-service
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: fdp-detection-service
+  minReplicas: ${HPA_MIN}
+  maxReplicas: ${HPA_MAX}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

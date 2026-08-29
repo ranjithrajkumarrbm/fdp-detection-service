@@ -1,0 +1,110 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: fdp-detection-service
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+
+# ---------------------------------------------------------------------------
+# Actuator / Kubernetes probes
+# ---------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include: readinessState
+        liveness:
+          include: livenessState
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: ${spring.application.name}
+    version: 1.0.0
+
+logging:
+  level:
+    com.example.fraud: ${LOG_LEVEL_APP:INFO}
+
+# ---------------------------------------------------------------------------
+# Fraud rules - every scalar below is overridable from the environment, e.g.
+#   FRAUD_DECISION_BLOCKSCORE=90
+#   FRAUD_RULES_VELOCITY_ENABLED=false
+#   FRAUD_RULES_VELOCITY_MAXTRANSACTIONS=6
+# Map entries can be overridden with SPRING_APPLICATION_JSON.
+# ---------------------------------------------------------------------------
+fraud:
+  decision:
+    challenge-score: ${FRAUD_DECISION_CHALLENGE_SCORE:40}
+    block-score: ${FRAUD_DECISION_BLOCK_SCORE:80}
+
+  rules:
+    high-value:
+      enabled: ${FRAUD_RULES_HIGH_VALUE_ENABLED:true}
+      score: ${FRAUD_RULES_HIGH_VALUE_SCORE:45}
+      challenge-amount:
+        DEBIT_CARD: 100000
+        CREDIT_CARD: 200000
+        NEFT: 500000
+        IMPS: 200000
+      block-amount:
+        DEBIT_CARD: 500000
+        CREDIT_CARD: 1000000
+        NEFT: 2000000
+        IMPS: 500000
+
+    velocity:
+      enabled: ${FRAUD_RULES_VELOCITY_ENABLED:true}
+      window-seconds: ${FRAUD_RULES_VELOCITY_WINDOW_SECONDS:120}
+      max-transactions: ${FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS:4}
+      block-transactions: ${FRAUD_RULES_VELOCITY_BLOCK_TRANSACTIONS:8}
+      score: ${FRAUD_RULES_VELOCITY_SCORE:40}
+
+    location-deviation:
+      enabled: ${FRAUD_RULES_LOCATION_DEVIATION_ENABLED:true}
+      challenge-distance-km: ${FRAUD_RULES_LOCATION_CHALLENGE_KM:300}
+      block-distance-km: ${FRAUD_RULES_LOCATION_BLOCK_KM:2000}
+      score: ${FRAUD_RULES_LOCATION_SCORE:35}
+
+    unusual-activity:
+      enabled: ${FRAUD_RULES_UNUSUAL_ACTIVITY_ENABLED:true}
+      amount-multiplier: ${FRAUD_RULES_UNUSUAL_AMOUNT_MULTIPLIER:5}
+      score: ${FRAUD_RULES_UNUSUAL_SCORE:30}
+
+    failed-then-success:
+      enabled: ${FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED:true}
+      window-seconds: ${FRAUD_RULES_FAILED_THEN_SUCCESS_WINDOW_SECONDS:600}
+      min-failures: ${FRAUD_RULES_FAILED_THEN_SUCCESS_MIN_FAILURES:3}
+      score: ${FRAUD_RULES_FAILED_THEN_SUCCESS_SCORE:50}
+
+    suspicious-transfer:
+      enabled: ${FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED:true}
+      high-amount: ${FRAUD_RULES_SUSPICIOUS_HIGH_AMOUNT:200000}
+      structuring-band: ${FRAUD_RULES_SUSPICIOUS_STRUCTURING_BAND:0.95}
+      new-beneficiary-high-amount: ${FRAUD_RULES_SUSPICIOUS_NEW_BENEFICIARY_HIGH_AMOUNT:100000}
+      score: ${FRAUD_RULES_SUSPICIOUS_SCORE:45}
+      regulatory-limit:
+        NEFT: 1000000
+        IMPS: 500000

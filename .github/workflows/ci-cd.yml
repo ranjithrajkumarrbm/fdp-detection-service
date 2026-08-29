@@ -1,0 +1,121 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to EKS after pushing the image"
+        type: boolean
+        default: true
+
+# ---------------------------------------------------------------------------
+# All deployment specifics come from GitHub repo/environment *Variables*
+# (Settings -> Secrets and variables -> Actions -> Variables) so nothing here
+# needs a code change to point at a different account/cluster/repo.
+#
+# Variables (with sane fallbacks): AWS_REGION, ECR_REPOSITORY, EKS_CLUSTER_NAME,
+#   K8S_NAMESPACE, REPLICAS, HPA_MIN, HPA_MAX, APP_ENV, LOG_LEVEL_APP,
+#   FRAUD_DECISION_CHALLENGE_SCORE, FRAUD_DECISION_BLOCK_SCORE, FRAUD_RULES_*
+# Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# ---------------------------------------------------------------------------
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'fdp-detection-service' }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'fdp-eks' }}
+  K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'fraud-detection' }}
+  REPLICAS: ${{ vars.REPLICAS || '3' }}
+  HPA_MIN: ${{ vars.HPA_MIN || '3' }}
+  HPA_MAX: ${{ vars.HPA_MAX || '10' }}
+  APP_ENV: ${{ vars.APP_ENV || 'prod' }}
+  LOG_LEVEL_APP: ${{ vars.LOG_LEVEL_APP || 'INFO' }}
+  FRAUD_DECISION_CHALLENGE_SCORE: ${{ vars.FRAUD_DECISION_CHALLENGE_SCORE || '40' }}
+  FRAUD_DECISION_BLOCK_SCORE: ${{ vars.FRAUD_DECISION_BLOCK_SCORE || '80' }}
+  FRAUD_RULES_HIGH_VALUE_ENABLED: ${{ vars.FRAUD_RULES_HIGH_VALUE_ENABLED || 'true' }}
+  FRAUD_RULES_VELOCITY_ENABLED: ${{ vars.FRAUD_RULES_VELOCITY_ENABLED || 'true' }}
+  FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS: ${{ vars.FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS || '4' }}
+  FRAUD_RULES_VELOCITY_WINDOW_SECONDS: ${{ vars.FRAUD_RULES_VELOCITY_WINDOW_SECONDS || '120' }}
+  FRAUD_RULES_LOCATION_DEVIATION_ENABLED: ${{ vars.FRAUD_RULES_LOCATION_DEVIATION_ENABLED || 'true' }}
+  FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED: ${{ vars.FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED || 'true' }}
+  FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED: ${{ vars.FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED || 'true' }}
+
+jobs:
+  build-test:
+    name: Build & test (Maven)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Maven verify
+        run: mvn -B -ntp clean verify
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/fdp-detection-service.jar
+          retention-days: 5
+
+  image-and-deploy:
+    name: Build image, push to ECR, deploy to EKS
+    needs: build-test
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --region "$AWS_REGION" \
+            || aws ecr create-repository --repository-name "$ECR_REPOSITORY" --region "$AWS_REGION" \
+                 --image-scanning-configuration scanOnPush=true
+
+      - name: Build and push image
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${GITHUB_SHA::12}"
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -t "$IMAGE" -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" .
+          docker push "$IMAGE"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          echo "IMAGE=$IMAGE"          >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$IMAGE_TAG"  >> "$GITHUB_ENV"
+          echo "image=$IMAGE"          >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to EKS
+        if: ${{ github.event_name == 'push' || inputs.deploy }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+
+          # Only substitute the placeholders we own; leave any other $... untouched.
+          SUBST='$IMAGE $IMAGE_TAG $K8S_NAMESPACE $REPLICAS $HPA_MIN $HPA_MAX $APP_ENV $LOG_LEVEL_APP $FRAUD_DECISION_CHALLENGE_SCORE $FRAUD_DECISION_BLOCK_SCORE $FRAUD_RULES_HIGH_VALUE_ENABLED $FRAUD_RULES_VELOCITY_ENABLED $FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS $FRAUD_RULES_VELOCITY_WINDOW_SECONDS $FRAUD_RULES_LOCATION_DEVIATION_ENABLED $FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED $FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED'
+
+          for f in namespace configmap deployment service hpa; do
+            echo "---- applying k8s/$f.yaml ----"
+            envsubst "$SUBST" < "k8s/$f.yaml" | kubectl apply -f -
+          done
+
+          kubectl -n "$K8S_NAMESPACE" set image deployment/fdp-detection-service \
+            fdp-detection-service="$IMAGE" --record=false
+          kubectl -n "$K8S_NAMESPACE" rollout status deployment/fdp-detection-service --timeout=240s

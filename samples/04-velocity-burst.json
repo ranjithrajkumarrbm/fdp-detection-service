@@ -1,0 +1,10 @@
+{
+  "transactionId": "TXN-20260829-0004-<N>",
+  "customerId": "CUST1003",
+  "type": "DEBIT_CARD",
+  "status": "SUCCESS",
+  "amount": 500.00,
+  "currency": "INR",
+  "channel": "ECOM",
+  "location": { "latitude": 12.9716, "longitude": 77.5946, "city": "Bengaluru", "country": "IN" }
+}

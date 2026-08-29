@@ -1,0 +1,12 @@
+{
+  "transactionId": "TXN-20260829-0001",
+  "customerId": "CUST1001",
+  "type": "DEBIT_CARD",
+  "status": "SUCCESS",
+  "amount": 2200.00,
+  "currency": "INR",
+  "channel": "POS",
+  "location": { "latitude": 19.0821, "longitude": 72.8916, "city": "Mumbai", "country": "IN" },
+  "deviceId": "pos-4471",
+  "ipAddress": "49.36.12.7"
+}
