@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fdp-detection-service
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: fdp-detection-service
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: fdp-detection-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

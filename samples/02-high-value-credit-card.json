@@ -1,0 +1,12 @@
+{
+  "transactionId": "TXN-20260829-0002",
+  "customerId": "CUST1002",
+  "type": "CREDIT_CARD",
+  "status": "SUCCESS",
+  "amount": 1250000.00,
+  "currency": "INR",
+  "channel": "ECOM",
+  "location": { "latitude": 28.6139, "longitude": 77.2090, "city": "New Delhi", "country": "IN" },
+  "deviceId": "web-chrome-991",
+  "ipAddress": "103.5.134.9"
+}

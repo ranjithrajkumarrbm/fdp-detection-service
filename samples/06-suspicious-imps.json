@@ -1,0 +1,17 @@
+{
+  "transactionId": "TXN-20260829-0006",
+  "customerId": "CUST1001",
+  "type": "IMPS",
+  "status": "SUCCESS",
+  "amount": 487500.00,
+  "currency": "INR",
+  "channel": "MOBILE",
+  "beneficiary": {
+    "accountNumber": "73829100045",
+    "ifsc": "KKBK0000261",
+    "name": "Quick Cash Traders",
+    "bankName": "Kotak Mahindra Bank"
+  },
+  "deviceId": "android-9931",
+  "ipAddress": "45.118.34.2"
+}
