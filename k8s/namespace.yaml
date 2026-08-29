@@ -4,3 +4,4 @@ metadata:
   name: ${K8S_NAMESPACE}
   labels:
     app.kubernetes.io/part-of: fraud-detection
+    app.kubernetes.io/managed-by: fdp-detection-service

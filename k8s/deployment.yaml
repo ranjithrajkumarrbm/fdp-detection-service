@@ -1,13 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fdp-detection-service
+  name: fraud-service
   namespace: ${K8S_NAMESPACE}
   labels:
-    app.kubernetes.io/name: fdp-detection-service
+    app.kubernetes.io/name: fraud-service
+    app.kubernetes.io/part-of: fraud-detection
     app.kubernetes.io/version: "${IMAGE_TAG}"
 spec:
-  replicas: ${REPLICAS}
+  # replicas is intentionally omitted: the HorizontalPodAutoscaler in k8s/hpa.yaml
+  # owns the replica count (min = ${HPA_MIN}). Setting it here would fight the HPA
+  # on every `kubectl apply`.
   revisionHistoryLimit: 5
   strategy:
     type: RollingUpdate
@@ -16,11 +19,12 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: fdp-detection-service
+      app.kubernetes.io/name: fraud-service
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: fdp-detection-service
+        app.kubernetes.io/name: fraud-service
+        app.kubernetes.io/part-of: fraud-detection
         app.kubernetes.io/version: "${IMAGE_TAG}"
     spec:
       securityContext:
@@ -31,15 +35,17 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: fdp-detection-service
-          image: ${IMAGE}
+        - name: fraud-service
+          # Env-specific: registry is injected by CI (`kubectl set image`);
+          # REPLACE_ME is only a placeholder for a bare `kubectl apply`.
+          image: REPLACE_ME/fraud-service:${IMAGE_TAG}
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
           envFrom:
             - configMapRef:
-                name: fdp-detection-service-config
+                name: fraud-service-config
           resources:
             requests:
               cpu: "250m"
@@ -47,6 +53,8 @@ spec:
             limits:
               cpu: "1"
               memory: "768Mi"
+          # NOTE: the platform ticket references "/healthz"; the actual Spring Boot
+          # image serves the equivalent liveness/readiness probes under /actuator.
           startupProbe:
             httpGet:
               path: /actuator/health/readiness
