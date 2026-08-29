@@ -1,15 +1,23 @@
+# Pod autoscaling for fraud-service.
+#
+# Requires metrics-server in the cluster (`kubectl top pods -n ${K8S_NAMESPACE}`
+# must return numbers) - normally a platform add-on from fdp-infra-compute.
+#
+# The Deployment deliberately does NOT set spec.replicas so this HPA is the sole
+# owner of the replica count. Env-specific: HPA_MIN, HPA_MAX.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: fdp-detection-service
+  name: fraud-service
   namespace: ${K8S_NAMESPACE}
   labels:
-    app.kubernetes.io/name: fdp-detection-service
+    app.kubernetes.io/name: fraud-service
+    app.kubernetes.io/part-of: fraud-detection
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: fdp-detection-service
+    name: fraud-service
   minReplicas: ${HPA_MIN}
   maxReplicas: ${HPA_MAX}
   metrics:
@@ -19,3 +27,14 @@ spec:
         target:
           type: Utilization
           averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
