@@ -4,6 +4,7 @@ import com.example.fraud.api.dto.BeneficiaryDto;
 import com.example.fraud.api.dto.FraudEvaluationResponse;
 import com.example.fraud.api.dto.LocationDto;
 import com.example.fraud.api.dto.TransactionRequest;
+import com.example.fraud.audit.TransactionAuditService;
 import com.example.fraud.domain.Beneficiary;
 import com.example.fraud.domain.CustomerProfile;
 import com.example.fraud.domain.GeoLocation;
@@ -35,15 +36,18 @@ public class FraudDetectionService {
     private final DecisionAggregator aggregator;
     private final CustomerProfileService profileService;
     private final TransactionHistoryService historyService;
+    private final TransactionAuditService auditService;
 
     public FraudDetectionService(RuleEngine ruleEngine,
                                  DecisionAggregator aggregator,
                                  CustomerProfileService profileService,
-                                 TransactionHistoryService historyService) {
+                                 TransactionHistoryService historyService,
+                                 TransactionAuditService auditService) {
         this.ruleEngine = ruleEngine;
         this.aggregator = aggregator;
         this.profileService = profileService;
         this.historyService = historyService;
+        this.auditService = auditService;
     }
 
     public FraudEvaluationResponse evaluate(TransactionRequest request) {
@@ -62,6 +66,9 @@ public class FraudDetectionService {
                 txn.transactionId(), txn.customerId(), txn.type(), txn.amount(),
                 response.decision(), response.riskScore(),
                 response.triggeredRules().stream().map(r -> r.ruleId()).toList());
+
+        // fire-and-forget audit trail; never blocks or fails the decision
+        auditService.record(request, response);
         return response;
     }
 

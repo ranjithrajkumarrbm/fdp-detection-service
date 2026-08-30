@@ -88,7 +88,7 @@ src/main/java/com/example/fraud
 ├── service/        FraudDetectionService, CustomerProfileService, TransactionHistoryService
 └── util/           GeoUtils (haversine)
 src/main/resources/application.yml
-k8s/                namespace, configmap, deployment, hpa, service, targetgroupbinding  (envsubst templated)
+k8s/                namespace, serviceaccount, configmap, deployment, hpa, service, targetgroupbinding  (envsubst templated)
 .github/workflows/ci-cd.yml
 samples/            request JSONs + expected-responses.md
 Dockerfile
@@ -400,6 +400,70 @@ kubectl -n fraud run curl --rm -it --image=curlimages/curl --restart=Never -- \
 
 ---
 
+## Audit trail (DynamoDB, async)
+
+Every evaluated transaction (request + decision) is written to DynamoDB on a
+dedicated executor **after** the response is returned — it never adds latency to,
+or can fail, the decision. Off by default (`AUDIT_DYNAMODB_ENABLED=false`), so
+local runs and tests need no AWS.
+
+**Table `fdp-audit-table`** — partition key **`transactionId`** (S); primary access
+pattern is look-up by transaction. Optional GSI `customerId-evaluatedAt-index`
+(HASH `customerId` S, RANGE `evaluatedAt` S) for "all evaluations for a customer,
+time-ordered" — the code already writes those attributes; add the GSI when you
+need it. Enable TTL on attribute **`ttl`** (epoch seconds, `AUDIT_DYNAMODB_TTL_DAYS`,
+default 400).
+
+Recreate the table with the transaction key:
+
+```bash
+aws dynamodb delete-table --region eu-west-2 --table-name fdp-audit-table   # if the old one exists
+aws dynamodb create-table --region eu-west-2 --table-name fdp-audit-table \
+  --billing-mode PAY_PER_REQUEST \
+  --attribute-definitions AttributeName=transactionId,AttributeType=S \
+  --key-schema AttributeName=transactionId,KeyType=HASH
+aws dynamodb update-time-to-live --region eu-west-2 --table-name fdp-audit-table \
+  --time-to-live-specification "Enabled=true,AttributeName=ttl"
+```
+
+**IRSA** — the pod runs as ServiceAccount `fraud-service` ([`k8s/serviceaccount.yaml`](k8s/serviceaccount.yaml)).
+Create an IAM role trusting the cluster OIDC provider with this policy, and pass
+its ARN as `AUDIT_IRSA_ROLE_ARN`:
+
+```json
+{ "Version": "2012-10-17", "Statement": [{
+  "Effect": "Allow", "Action": "dynamodb:PutItem",
+  "Resource": "arn:aws:dynamodb:eu-west-2:861477414666:table/fdp-audit-table" }] }
+```
+
+**Enable** (repo Variables): `AUDIT_DYNAMODB_ENABLED=true`,
+`AUDIT_DYNAMODB_TABLE_NAME=fdp-audit-table`, `AUDIT_IRSA_ROLE_ARN=<role arn>`
+(`AWS_REGION` already set).
+
+### Testing the audit trail
+
+```bash
+# 1. send a few transactions through the ALB / API Gateway (see above), e.g.
+curl -s -XPOST http://$ALB/api/v1/fraud/evaluate -H 'Content-Type: application/json' \
+  -d '{"transactionId":"AUD-1","customerId":"CUST1002","type":"CREDIT_CARD","amount":1250000}'
+
+# 2. read the row straight back by transactionId
+aws dynamodb get-item --region eu-west-2 --table-name fdp-audit-table \
+  --key '{"transactionId":{"S":"AUD-1"}}'
+
+# 3. or scan recent rows
+aws dynamodb scan --region eu-west-2 --table-name fdp-audit-table --max-items 10
+```
+
+Local test without EKS: `AUDIT_DYNAMODB_ENABLED=true AUDIT_DYNAMODB_TABLE_NAME=fdp-audit-table
+AWS_REGION=eu-west-2 mvn spring-boot:run` with AWS creds in the environment, then
+POST to `localhost:8080` and `get-item` as above.
+
+If a write fails it is logged (`Audit write failed for txn …`) and the API response
+is unaffected.
+
+---
+
 ## GitHub Actions pipeline
 
 [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) runs on push to `main`
@@ -412,7 +476,7 @@ and via **Run workflow**:
    - create the ECR repo if missing
    - `docker build` → push `:<sha>` and `:latest`
    - `aws eks update-kubeconfig` for the **existing** cluster
-   - `envsubst` the `k8s/*.yaml` (namespace, configmap, deployment, hpa, service, targetgroupbinding) and `kubectl apply`
+   - `envsubst` the `k8s/*.yaml` (namespace, serviceaccount, configmap, deployment, hpa, service, targetgroupbinding) and `kubectl apply`
    - `kubectl set image` to the pushed ECR tag, then `kubectl rollout status`
 
 ### Required GitHub **Secrets**
@@ -434,6 +498,7 @@ mapping) that allows `kubectl apply` in the target namespace.
 
 `AWS_REGION`, `ECR_REPOSITORY`, `EKS_CLUSTER_NAME`, `K8S_NAMESPACE`, `HPA_MIN`, `HPA_MAX`,
 `ALB_TARGET_GROUP_ARN`, `APP_ENV`, `LOG_LEVEL_APP`,
+`AUDIT_DYNAMODB_ENABLED`, `AUDIT_DYNAMODB_TABLE_NAME`, `AUDIT_IRSA_ROLE_ARN`,
 `FRAUD_DECISION_CHALLENGE_SCORE`, `FRAUD_DECISION_BLOCK_SCORE`,
 `FRAUD_RULES_HIGH_VALUE_ENABLED`, `FRAUD_RULES_VELOCITY_ENABLED`,
 `FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS`, `FRAUD_RULES_VELOCITY_WINDOW_SECONDS`,
