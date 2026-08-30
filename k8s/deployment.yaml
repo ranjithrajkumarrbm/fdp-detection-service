@@ -27,6 +27,7 @@ spec:
         app.kubernetes.io/part-of: fraud-detection
         app.kubernetes.io/version: "${IMAGE_TAG}"
     spec:
+      serviceAccountName: fraud-service
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

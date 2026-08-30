@@ -49,6 +49,17 @@ logging:
     com.example.fraud: ${LOG_LEVEL_APP:INFO}
 
 # ---------------------------------------------------------------------------
+# Async audit trail. Disabled by default (no AWS needed for local/dev/tests).
+# In EKS: set AUDIT_DYNAMODB_ENABLED=true, AUDIT_DYNAMODB_TABLE_NAME, AWS_REGION,
+# and give the pod an IRSA role with dynamodb:PutItem on the table.
+# ---------------------------------------------------------------------------
+audit:
+  dynamodb:
+    enabled: ${AUDIT_DYNAMODB_ENABLED:false}
+    table-name: ${AUDIT_DYNAMODB_TABLE_NAME:}
+    ttl-days: ${AUDIT_DYNAMODB_TTL_DAYS:400}
+
+# ---------------------------------------------------------------------------
 # Fraud rules - every scalar below is overridable from the environment, e.g.
 #   FRAUD_DECISION_BLOCKSCORE=90
 #   FRAUD_RULES_VELOCITY_ENABLED=false

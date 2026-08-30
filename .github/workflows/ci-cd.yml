@@ -17,11 +17,14 @@ on:
 #
 # Variables (with sane fallbacks): AWS_REGION, ECR_REPOSITORY, EKS_CLUSTER_NAME,
 #   K8S_NAMESPACE, HPA_MIN, HPA_MAX, ALB_TARGET_GROUP_ARN, APP_ENV, LOG_LEVEL_APP,
+#   AUDIT_DYNAMODB_ENABLED, AUDIT_DYNAMODB_TABLE_NAME, AUDIT_IRSA_ROLE_ARN,
 #   FRAUD_DECISION_CHALLENGE_SCORE, FRAUD_DECISION_BLOCK_SCORE, FRAUD_RULES_*
 # Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 #
 # ALB_TARGET_GROUP_ARN comes from `terraform output` in fdp-infra-compute
 # (alb_target_group_arn) - the ALB/listener/target-group are pre-provisioned there.
+# AUDIT_IRSA_ROLE_ARN: IAM role (OIDC-trusted) allowing dynamodb:PutItem on the
+# audit table; required only when AUDIT_DYNAMODB_ENABLED=true.
 # ---------------------------------------------------------------------------
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
@@ -33,6 +36,9 @@ env:
   ALB_TARGET_GROUP_ARN: ${{ vars.ALB_TARGET_GROUP_ARN }}
   APP_ENV: ${{ vars.APP_ENV || 'dev' }}
   LOG_LEVEL_APP: ${{ vars.LOG_LEVEL_APP || 'INFO' }}
+  AUDIT_DYNAMODB_ENABLED: ${{ vars.AUDIT_DYNAMODB_ENABLED || 'false' }}
+  AUDIT_DYNAMODB_TABLE_NAME: ${{ vars.AUDIT_DYNAMODB_TABLE_NAME || 'fdp-audit-table' }}
+  AUDIT_IRSA_ROLE_ARN: ${{ vars.AUDIT_IRSA_ROLE_ARN }}
   FRAUD_DECISION_CHALLENGE_SCORE: ${{ vars.FRAUD_DECISION_CHALLENGE_SCORE || '40' }}
   FRAUD_DECISION_BLOCK_SCORE: ${{ vars.FRAUD_DECISION_BLOCK_SCORE || '80' }}
   FRAUD_RULES_HIGH_VALUE_ENABLED: ${{ vars.FRAUD_RULES_HIGH_VALUE_ENABLED || 'true' }}
@@ -113,9 +119,9 @@ jobs:
 
           # Only substitute the placeholders we own; leave any other $... untouched.
           # shellcheck disable=SC2016  # $VARs here are envsubst's SHELL-FORMAT arg, not shell expansions
-          SUBST='$IMAGE $IMAGE_TAG $K8S_NAMESPACE $HPA_MIN $HPA_MAX $ALB_TARGET_GROUP_ARN $APP_ENV $LOG_LEVEL_APP $FRAUD_DECISION_CHALLENGE_SCORE $FRAUD_DECISION_BLOCK_SCORE $FRAUD_RULES_HIGH_VALUE_ENABLED $FRAUD_RULES_VELOCITY_ENABLED $FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS $FRAUD_RULES_VELOCITY_WINDOW_SECONDS $FRAUD_RULES_LOCATION_DEVIATION_ENABLED $FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED $FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED'
+          SUBST='$IMAGE $IMAGE_TAG $K8S_NAMESPACE $HPA_MIN $HPA_MAX $ALB_TARGET_GROUP_ARN $APP_ENV $LOG_LEVEL_APP $AWS_REGION $AUDIT_DYNAMODB_ENABLED $AUDIT_DYNAMODB_TABLE_NAME $AUDIT_IRSA_ROLE_ARN $FRAUD_DECISION_CHALLENGE_SCORE $FRAUD_DECISION_BLOCK_SCORE $FRAUD_RULES_HIGH_VALUE_ENABLED $FRAUD_RULES_VELOCITY_ENABLED $FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS $FRAUD_RULES_VELOCITY_WINDOW_SECONDS $FRAUD_RULES_LOCATION_DEVIATION_ENABLED $FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED $FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED'
 
-          for f in namespace configmap deployment hpa service targetgroupbinding; do
+          for f in namespace serviceaccount configmap deployment hpa service targetgroupbinding; do
             echo "---- applying k8s/$f.yaml ----"
             envsubst "$SUBST" < "k8s/$f.yaml" | kubectl apply -f -
           done
