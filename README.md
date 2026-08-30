@@ -88,7 +88,7 @@ src/main/java/com/example/fraud
 ├── service/        FraudDetectionService, CustomerProfileService, TransactionHistoryService
 └── util/           GeoUtils (haversine)
 src/main/resources/application.yml
-k8s/                namespace, configmap, deployment, hpa, service, ingress  (envsubst templated)
+k8s/                namespace, configmap, deployment, hpa, service, targetgroupbinding  (envsubst templated)
 .github/workflows/ci-cd.yml
 samples/            request JSONs + expected-responses.md
 Dockerfile
@@ -325,7 +325,7 @@ The manifests in [`k8s/`](k8s/) are plain YAML with `${VAR}` placeholders resolv
 | Deployment | `fraud-service` | no `spec.replicas` (owned by the HPA), probes on `/actuator/health/*`, image `REPLACE_ME/fraud-service:${IMAGE_TAG}` (CI rewrites via `kubectl set image`) |
 | HPA        | `fraud-service` | `autoscaling/v2`, CPU 70% / mem 80%, `minReplicas=${HPA_MIN}` (2) … `maxReplicas=${HPA_MAX}` (10); needs metrics-server |
 | Service    | `fraud-service` | ClusterIP, `80 → 8080` |
-| Ingress    | `fraud-service` | `ingressClassName: alb` → **internal** ALB |
+| TargetGroupBinding | `fraud-service` | registers pod IPs into the **pre-provisioned** ALB target group (`${ALB_TARGET_GROUP_ARN}`) |
 
 > The Deployment intentionally omits `spec.replicas` so the HPA is the sole owner of
 > the count — otherwise every `kubectl apply` would reset it and fight the autoscaler.
@@ -333,31 +333,19 @@ The manifests in [`k8s/`](k8s/) are plain YAML with `${VAR}` placeholders resolv
 > Node capacity for scaled-up pods is handled by Cluster Autoscaler / Karpenter in
 > `fdp-infra-compute`, not here.
 
-### The internal ALB (`k8s/ingress.yaml`)
+### The ALB (`k8s/targetgroupbinding.yaml`)
 
-The platform repo **`fdp-infra-compute`** already provisions everything the ALB needs:
-the AWS Load Balancer Controller (IRSA-backed), an `alb` `IngressClass` whose
-`IngressClassParams` pin `scheme: internal`, a dedicated frontend security group, and
-`kubernetes.io/role/internal-elb` tags on the private application subnets.
+`fdp-infra-compute` **pre-provisions the whole ALB** — load balancer, listener,
+target group, security groups, health check — and the AWS Load Balancer Controller
+(IRSA role `fdp-dev-euw2-eks-alb-controller`). This repo does not create an Ingress.
 
-So this repo's Ingress **only**:
+The `TargetGroupBinding` CRD points the existing target group
+(`terraform output alb_target_group_arn`) at the `fraud-service` Service; the
+controller then keeps that target group's IP targets in sync with the pods.
 
-- selects that class with `spec.ingressClassName: alb` (no deprecated
-  `kubernetes.io/ingress.class` annotation),
-- sets `target-type: ip`, `backend-protocol: HTTP`, `listen-ports: '[{"HTTP":80}]'`,
-- pins the target-group health check to `/actuator/health/readiness` on `traffic-port`
-  (the ticket's generic `/healthz`; the Spring Boot image serves it under `/actuator`),
-- names the LB (`${ALB_NAME}`, e.g. `fdp-dev-euw2-fraud`) and joins ALB group `fdp-fraud`,
-- attaches the platform frontend SG via `${ALB_SECURITY_GROUP_ID}`.
-
-It does **not** set `scheme`, `subnets`, or `manage-backend-security-group-rules`, and
-creates no IAM / SG / controller / IngressClass — all of that is owned by
-`fdp-infra-compute` (`terraform output`: `alb_security_group_id`, `vpc_id`,
-`private_app_subnet_ids`, `aws_region`, `cluster_name`).
-
-For TLS at the ALB: change `listen-ports` to `'[{"HTTPS":443}]'` and add
-`alb.ingress.kubernetes.io/certificate-arn: <acm-arn>`. Otherwise TLS terminates
-upstream at API Gateway and the ALB stays HTTP:80.
+The target group's **health check** is defined in `fdp-infra-compute` — it must be
+`HTTP /actuator/health/readiness` on the traffic port, or targets stay `unhealthy`.
+The SG rule ALB → nodes/pods:8080 is also owned there.
 
 ### Manual apply
 
@@ -371,8 +359,7 @@ export LOG_LEVEL_APP=INFO
 export IMAGE_TAG=$(git rev-parse --short=12 HEAD)
 export IMAGE=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/fdp/fraud-detection-service-repo:$IMAGE_TAG
 # from `terraform output` in fdp-infra-compute:
-export ALB_SECURITY_GROUP_ID=sg-XXXXXXXX
-export ALB_NAME=fdp-dev-euw2-fraud
+export ALB_TARGET_GROUP_ARN=arn:aws:elasticloadbalancing:eu-west-2:861477414666:targetgroup/fdp-dev-euw2-eks-fraud/12ab4788af4f738c
 # ConfigMap tunables (override as needed)
 export FRAUD_DECISION_CHALLENGE_SCORE=40 FRAUD_DECISION_BLOCK_SCORE=80
 export FRAUD_RULES_HIGH_VALUE_ENABLED=true FRAUD_RULES_VELOCITY_ENABLED=true
@@ -382,7 +369,7 @@ export FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED=true FRAUD_RULES_SUSPICIOUS_TRANS
 
 aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 
-for f in namespace configmap deployment hpa service ingress; do
+for f in namespace configmap deployment hpa service targetgroupbinding; do
   envsubst < "k8s/$f.yaml" | kubectl apply -f -
 done
 kubectl -n "$K8S_NAMESPACE" set image deployment/fraud-service fraud-service="$IMAGE"
@@ -394,21 +381,21 @@ kubectl -n "$K8S_NAMESPACE" get hpa fraud-service
 
 ```bash
 kubectl -n fraud rollout status deploy/fraud-service
-kubectl -n fraud get ingress fraud-service
-#   ADDRESS -> internal-fdp-dev-euw2-fraud-*.eu-west-2.elb.amazonaws.com
-kubectl -n fraud describe ingress fraud-service      # check AWS LB Controller events
+kubectl -n fraud get targetgroupbinding fraud-service
+kubectl -n fraud describe targetgroupbinding fraud-service   # controller events
 
-aws elbv2 describe-load-balancers --region eu-west-2 \
-  --query "LoadBalancers[?LoadBalancerName=='fdp-dev-euw2-fraud'].[Scheme,VpcId,State.Code]" \
-  --output table
-#   Scheme must be "internal"
+# targets should become "healthy" within ~30s
+aws elbv2 describe-target-health --region eu-west-2 \
+  --target-group-arn "$ALB_TARGET_GROUP_ARN" \
+  --query 'TargetHealthDescriptions[].{ip:Target.Id,port:Target.Port,state:TargetHealth.State}' --output table
 ```
 
-Smoke test from inside the cluster (or via the ALB from a host in the VPC):
+Smoke test — the ALB is **internal**, so call it from a host/pod inside the VPC:
 
 ```bash
+ALB=internal-fdp-dev-euw2-eks-int-430021111.eu-west-2.elb.amazonaws.com
 kubectl -n fraud run curl --rm -it --image=curlimages/curl --restart=Never -- \
-  curl -s http://fraud-service/api/v1/fraud/rules
+  sh -c "curl -s http://$ALB/api/v1/fraud/rules"
 ```
 
 ---
@@ -425,7 +412,7 @@ and via **Run workflow**:
    - create the ECR repo if missing
    - `docker build` → push `:<sha>` and `:latest`
    - `aws eks update-kubeconfig` for the **existing** cluster
-   - `envsubst` the `k8s/*.yaml` (namespace, configmap, deployment, hpa, service, ingress) and `kubectl apply`
+   - `envsubst` the `k8s/*.yaml` (namespace, configmap, deployment, hpa, service, targetgroupbinding) and `kubectl apply`
    - `kubectl set image` to the pushed ECR tag, then `kubectl rollout status`
 
 ### Required GitHub **Secrets**
@@ -446,7 +433,7 @@ mapping) that allows `kubectl apply` in the target namespace.
 ### GitHub **Variables** (all optional — fallbacks in the workflow)
 
 `AWS_REGION`, `ECR_REPOSITORY`, `EKS_CLUSTER_NAME`, `K8S_NAMESPACE`, `HPA_MIN`, `HPA_MAX`,
-`ALB_SECURITY_GROUP_ID`, `ALB_NAME`, `APP_ENV`, `LOG_LEVEL_APP`,
+`ALB_TARGET_GROUP_ARN`, `APP_ENV`, `LOG_LEVEL_APP`,
 `FRAUD_DECISION_CHALLENGE_SCORE`, `FRAUD_DECISION_BLOCK_SCORE`,
 `FRAUD_RULES_HIGH_VALUE_ENABLED`, `FRAUD_RULES_VELOCITY_ENABLED`,
 `FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS`, `FRAUD_RULES_VELOCITY_WINDOW_SECONDS`,
