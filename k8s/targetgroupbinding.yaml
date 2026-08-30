@@ -1,0 +1,21 @@
+# The ALB, listener and target group are pre-provisioned by fdp-infra-compute.
+# This binding makes the AWS Load Balancer Controller keep that target group's
+# targets in sync with the fraud-service endpoints (pod IPs, target-type ip).
+#
+# Env-specific: ALB_TARGET_GROUP_ARN (terraform output: alb_target_group_arn).
+# SG rule ALB -> nodes/pods on 8080 is owned by fdp-infra-compute, so no
+# `networking:` block here.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: fraud-service
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: fraud-service
+    app.kubernetes.io/part-of: fraud-detection
+spec:
+  serviceRef:
+    name: fraud-service
+    port: 80
+  targetGroupARN: ${ALB_TARGET_GROUP_ARN}
+  targetType: ip

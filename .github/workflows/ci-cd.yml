@@ -16,12 +16,12 @@ on:
 # needs a code change to point at a different account/cluster/repo.
 #
 # Variables (with sane fallbacks): AWS_REGION, ECR_REPOSITORY, EKS_CLUSTER_NAME,
-#   K8S_NAMESPACE, HPA_MIN, HPA_MAX, ALB_SECURITY_GROUP_ID, ALB_NAME, APP_ENV, LOG_LEVEL_APP,
+#   K8S_NAMESPACE, HPA_MIN, HPA_MAX, ALB_TARGET_GROUP_ARN, APP_ENV, LOG_LEVEL_APP,
 #   FRAUD_DECISION_CHALLENGE_SCORE, FRAUD_DECISION_BLOCK_SCORE, FRAUD_RULES_*
 # Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 #
-# ALB_SECURITY_GROUP_ID / ALB_NAME come from `terraform output` in fdp-infra-compute
-# (alb_security_group_id, and a per-env load balancer name e.g. fdp-dev-euw2-fraud).
+# ALB_TARGET_GROUP_ARN comes from `terraform output` in fdp-infra-compute
+# (alb_target_group_arn) - the ALB/listener/target-group are pre-provisioned there.
 # ---------------------------------------------------------------------------
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
@@ -30,8 +30,7 @@ env:
   K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'fraud' }}
   HPA_MIN: ${{ vars.HPA_MIN || '2' }}
   HPA_MAX: ${{ vars.HPA_MAX || '10' }}
-  ALB_SECURITY_GROUP_ID: ${{ vars.ALB_SECURITY_GROUP_ID || 'sg-REPLACE_ME' }}
-  ALB_NAME: ${{ vars.ALB_NAME || 'fdp-dev-euw2-fraud' }}
+  ALB_TARGET_GROUP_ARN: ${{ vars.ALB_TARGET_GROUP_ARN }}
   APP_ENV: ${{ vars.APP_ENV || 'dev' }}
   LOG_LEVEL_APP: ${{ vars.LOG_LEVEL_APP || 'INFO' }}
   FRAUD_DECISION_CHALLENGE_SCORE: ${{ vars.FRAUD_DECISION_CHALLENGE_SCORE || '40' }}
@@ -114,9 +113,9 @@ jobs:
 
           # Only substitute the placeholders we own; leave any other $... untouched.
           # shellcheck disable=SC2016  # $VARs here are envsubst's SHELL-FORMAT arg, not shell expansions
-          SUBST='$IMAGE $IMAGE_TAG $K8S_NAMESPACE $HPA_MIN $HPA_MAX $ALB_SECURITY_GROUP_ID $ALB_NAME $APP_ENV $LOG_LEVEL_APP $FRAUD_DECISION_CHALLENGE_SCORE $FRAUD_DECISION_BLOCK_SCORE $FRAUD_RULES_HIGH_VALUE_ENABLED $FRAUD_RULES_VELOCITY_ENABLED $FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS $FRAUD_RULES_VELOCITY_WINDOW_SECONDS $FRAUD_RULES_LOCATION_DEVIATION_ENABLED $FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED $FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED'
+          SUBST='$IMAGE $IMAGE_TAG $K8S_NAMESPACE $HPA_MIN $HPA_MAX $ALB_TARGET_GROUP_ARN $APP_ENV $LOG_LEVEL_APP $FRAUD_DECISION_CHALLENGE_SCORE $FRAUD_DECISION_BLOCK_SCORE $FRAUD_RULES_HIGH_VALUE_ENABLED $FRAUD_RULES_VELOCITY_ENABLED $FRAUD_RULES_VELOCITY_MAX_TRANSACTIONS $FRAUD_RULES_VELOCITY_WINDOW_SECONDS $FRAUD_RULES_LOCATION_DEVIATION_ENABLED $FRAUD_RULES_FAILED_THEN_SUCCESS_ENABLED $FRAUD_RULES_SUSPICIOUS_TRANSFER_ENABLED'
 
-          for f in namespace configmap deployment hpa service ingress; do
+          for f in namespace configmap deployment hpa service targetgroupbinding; do
             echo "---- applying k8s/$f.yaml ----"
             envsubst "$SUBST" < "k8s/$f.yaml" | kubectl apply -f -
           done
@@ -126,5 +125,7 @@ jobs:
           kubectl -n "$K8S_NAMESPACE" set image deployment/fraud-service \
             fraud-service="$IMAGE" --record=false
           kubectl -n "$K8S_NAMESPACE" rollout status deployment/fraud-service --timeout=240s
-          kubectl -n "$K8S_NAMESPACE" get ingress fraud-service \
-            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{"\n"}'
+          kubectl -n "$K8S_NAMESPACE" get targetgroupbinding fraud-service
+          aws elbv2 describe-target-health --region "$AWS_REGION" \
+            --target-group-arn "$ALB_TARGET_GROUP_ARN" \
+            --query 'TargetHealthDescriptions[].TargetHealth.State' --output text
